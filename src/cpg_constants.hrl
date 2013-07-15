@@ -21,3 +21,6 @@
 % so that global locking is unnecessary
 -define(GROUP_NAME_WITH_LOCAL_PIDS_ONLY, undefined).
 
+% Enable this to run the distributed tests 
+% It starts up the dummy_server and services
+-define(ENABLE_DISTRIBUTED_TESTING, undefined).

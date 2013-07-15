@@ -17,6 +17,9 @@
 -export([start_process/1, stop_process/1]).
 -export([init/1]).
 
+-include("cpg_logging.hrl").
+
+
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 

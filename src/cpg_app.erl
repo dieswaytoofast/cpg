@@ -74,12 +74,27 @@ start(_, _) ->
         is_list(L) ->
             [?DEFAULT_SCOPE | L]
     end,
+    start_all_sup(ScopeList).
+
+-ifdef(ENABLE_DISTRIBUTED_TESTING).
+start_all_sup(ScopeList) ->
+    {ok, _} = cpg_dummy_sup:start_link(),
+    start_cpg_sup(ScopeList).
+-else.
+start_all_supervisors(ScopeList) ->
+    start_cpg_sup(ScopeList).
+-endif.
+
+start_cpg_sup(ScopeList) ->
     case cpg_sup:start_link(ScopeList) of
         {ok, _} = Success ->
             Success;
         {error, _} = Error ->
             Error
     end.
+
+
+
 
 %%-------------------------------------------------------------------------
 %% @doc
