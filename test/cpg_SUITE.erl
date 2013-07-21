@@ -21,10 +21,14 @@
 -define(PROPTEST(F), true = proper:quickcheck(F())).
 -define(PROPTEST(F, A), true = proper:quickcheck(F(A))).
 
--define(NUMTESTS, 500).
+-define(NUMTESTS, 10).
+-define(NUMPROCS, 10).
 -define(DEFAULT_NAME, <<"cpg_dummy">>).
 -define(SCOPES, [scope_1, scope_2, scope_3, scope_4, scope_5]).
 -define(REMOTE_NODES, ['b@paglierino', 'c@paglierino']).
+%% CPG Contasnts
+-define(DEFAULT_SCOPE, cpg_default_scope).
+
 
 suite() ->
     [{ct_hooks,[cth_surefire]}, {timetrap,{seconds,320}}].
@@ -51,6 +55,7 @@ init_per_testcase(_TestCase, Config) ->
 end_per_testcase(_TestCase, Config) ->
     % Kill the dummy processes that  are used by this testcase
     stop_dummy_processes(Config),
+    remove_groups(Config),
     ok.
 
 
@@ -79,6 +84,8 @@ groups() ->
 %                t_check_get_remote_members_1,
 %                t_check_get_remote_members_2,
 %                t_check_get_remote_members_3
+%                t_check_which_groups_0,
+%                t_check_which_groups_1
          ]},
         {test, [],
          [t_test]},
@@ -121,7 +128,10 @@ groups() ->
                 t_get_remote_members_2_c,
                 t_get_remote_members_2_d,
                 t_get_remote_members_3_a,
-                t_get_remote_members_3_b
+                t_get_remote_members_3_b,
+                t_which_groups_1_a,
+                t_which_groups_1_b,
+                t_which_groups_2
 
 
          ]}
@@ -200,6 +210,12 @@ t_check_get_remote_members_2(_) ->
 
 t_check_get_remote_members_3(_) ->
     ?CHECKSPEC(cpg, get_remote_members, 3).
+
+t_check_which_groups_0(_) ->
+    ?CHECKSPEC(cpg, which_groups, 0).
+
+t_check_which_groups_1(_) ->
+    ?CHECKSPEC(cpg, which_groups, 1).
 
 t_create_1(_) ->
     ?PROPTEST(prop_create_1).
@@ -513,6 +529,32 @@ prop_get_remote_members_3_b(ScopeAll) ->
     numtests(?NUMTESTS,
              ?FORALL({Scope, Name, LocalPids, RemoteNodeAndPids}, {scope(ScopeAll), name(), pids(local), node_and_pids(remote)}, join_and_get_remote_members(Scope, Name, LocalPids, RemoteNodeAndPids, _Exclude = true))).
 
+% Check to see which groups exist
+t_which_groups_1_a(_Config) ->
+    ?PROPTEST(prop_which_groups_1_a).
+
+% Check to see which groups exist locally
+prop_which_groups_1_a() ->
+    numtests(?NUMTESTS,
+             ?FORALL({Names, LocalPids}, {names(), pids(local)}, check_which_groups(Names, LocalPids, []))).
+
+% Check to see which groups exist everywhere
+t_which_groups_1_b(_Config) ->
+    ?PROPTEST(prop_which_groups_1_b).
+
+prop_which_groups_1_b() ->
+    numtests(?NUMTESTS,
+             ?FORALL({Names, RemoteNodeAndPids}, {names(), node_and_pids(remote)}, check_which_groups(Names, [], RemoteNodeAndPids))).
+
+% Check to see which groups exist everywhere
+t_which_groups_2(Config) ->
+    ScopeAll = ?config(scope_all, Config),
+    ?PROPTEST(prop_which_groups_2, ScopeAll).
+
+prop_which_groups_2(ScopeAll) ->
+    numtests(?NUMTESTS,
+             ?FORALL({Scope, Names, RemoteNodeAndPids}, {scope(ScopeAll), names(), node_and_pids(remote)}, check_which_groups(Scope, Names, [], RemoteNodeAndPids))).
+
 %% Joins self() to Name and leaves 
 join_and_leave(Name) ->
     % Can leave if joined
@@ -560,64 +602,59 @@ join_and_get_members(Name) ->
     Self = self(),
     {ok, Name, [Self]} = cpg:get_members(Name),
     ok = cpg:leave(Name),
-    {ok, Name, []} = cpg:get_members(Name),
     true.
 
 join_and_get_members(Name, Pids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
 
     % Join the InPids
     setup_pids(Name, UPids, []),
-    check_members(Name, UPids, undefined),
+    check_members(get_members, Name, UPids, undefined),
 
     % Cleanup
     cleanup_pids(Name, UPids, []),
-    {ok, Name, []} = cpg:get_members(Name),
     true;
 
 
 join_and_get_members(Name, Pids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
     EPid = random_exclude(local, UPids),
 
     % Join the InPids
     setup_pids(Name, UPids, []),
-    check_members(Name, UPids, EPid),
+    check_members(get_members, Name, UPids, EPid),
 
     % Cleanup
     cleanup_pids(Name, UPids, []),
-    {ok, Name, []} = cpg:get_members(Name),
     true.
 
 
 join_and_get_members(Scope, Name, Pids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
     % in this scope
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
 
     % Join the InPids
     setup_pids(Scope, Name, UPids, []),
-    check_members(Scope, Name, UPids, undefined),
+    check_members(get_members, Scope, Name, UPids, undefined),
 
     % Cleanup
     cleanup_pids(Scope, Name, UPids, []),
-    {ok, Name, []} = cpg:get_members(Scope, Name),
     true;
 
 join_and_get_members(Scope, Name, Pids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
     EPid = random_exclude(local, UPids),
 
     % Join the InPids
     setup_pids(Scope, Name, UPids, []),
-    check_members(Scope, Name, UPids, EPid),
+    check_members(get_members, Scope, Name, UPids, EPid),
 
     % Cleanup
     cleanup_pids(Scope, Name, UPids, []),
-    {ok, Name, []} = cpg:get_members(Scope, Name),
     true.
 
 join_and_get_local_members(Name) ->
@@ -626,62 +663,61 @@ join_and_get_local_members(Name) ->
     Self = self(),
     {ok, Name, [Self]} = cpg:get_local_members(Name),
     ok = cpg:leave(Name),
-    {error, {no_process, Name}} = cpg:get_local_members(Name),
     true.
 
 join_and_get_local_members(Name, Pids, RemoteNodeAndPids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
 
     % Join the InPids
-    setup_pids(Name, UPids, RemoteNodeAndPids),
-    check_local_members(Name, UPids, undefined),
+    setup_pids(Name, UPids, RPids),
+    check_members(get_local_members, Name, UPids, undefined),
 
     % Cleanup
-    cleanup_pids(Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_local_members(Name),
+    cleanup_pids(Name, UPids, RPids),
     true;
 
 join_and_get_local_members(Name, Pids, RemoteNodeAndPids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
     EPid = random_exclude(local, UPids),
 
     % Join the InPids
-    setup_pids(Name, UPids, RemoteNodeAndPids),
-    check_local_members(Name, UPids, EPid),
+    setup_pids(Name, UPids, RPids),
+    check_members(get_local_members, Name, UPids, EPid),
 
     % Cleanup
-    cleanup_pids(Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_local_members(Name),
+    cleanup_pids(Name, UPids, RPids),
     true.
 
 join_and_get_local_members(Scope, Name, Pids, RemoteNodeAndPids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
 
     % Join the InPids
-    setup_pids(Scope, Name, UPids, RemoteNodeAndPids),
+    setup_pids(Scope, Name, UPids, RPids),
 
-    check_local_members(Scope, Name, UPids, undefined),
+    check_members(get_local_members, Scope, Name, UPids, undefined),
 
     % Cleanup
-    cleanup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_local_members(Scope, Name),
+    cleanup_pids(Scope, Name, UPids, RPids),
     true;
 
 join_and_get_local_members(Scope, Name, Pids, RemoteNodeAndPids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
     EPid = random_exclude(local, UPids),
 
     % Join the InPids
-    setup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    check_local_members(Scope, Name, UPids, EPid),
+    setup_pids(Scope, Name, UPids, RPids),
+    check_members(get_local_members, Scope, Name, UPids, EPid),
 
     % Cleanup
-    cleanup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_local_members(Scope, Name),
+    cleanup_pids(Scope, Name, UPids, RPids),
     true.
 
 join_and_get_remote_members(Name) ->
@@ -693,162 +729,232 @@ join_and_get_remote_members(Name) ->
 
 join_and_get_remote_members(Name, Pids, RemoteNodeAndPids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
 
     % Join the InPids
-    setup_pids(Name, UPids, RemoteNodeAndPids),
-    check_remote_members(Name, RemoteNodeAndPids, undefined),
+    setup_pids(Name, UPids, RPids),
+    check_remote_members(Name, RPids, undefined),
 
     % Cleanup
-    cleanup_pids(Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_remote_members(Name),
+    cleanup_pids(Name, UPids, RPids),
     true;
 
 join_and_get_remote_members(Name, Pids, RemoteNodeAndPids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
     EPid = random_exclude(remote, UPids),
 
     % Join the InPids
-    setup_pids(Name, UPids, RemoteNodeAndPids),
-    check_remote_members(Name, RemoteNodeAndPids, EPid),
+    setup_pids(Name, UPids, RPids),
+    check_remote_members(Name, RPids, EPid),
 
     % Cleanup
-    cleanup_pids(Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_remote_members(Name),
+    cleanup_pids(Name, UPids, RPids),
     true.
 
 join_and_get_remote_members(Scope, Name, Pids, RemoteNodeAndPids, _Exclude = false) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
 
     % Join the InPids
-    setup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    check_remote_members(Scope, Name, RemoteNodeAndPids, undefined),
+    setup_pids(Scope, Name, UPids, RPids),
+    check_remote_members(Scope, Name, RPids, undefined),
 
     % Cleanup
-    cleanup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_remote_members(Scope, Name),
+    cleanup_pids(Scope, Name, UPids, RPids),
     true;
 
 join_and_get_remote_members(Scope, Name, Pids, RemoteNodeAndPids, _Exclude = true) ->
     % Only the passed in Pids are members in this group
-    UPids = lists:sort(Pids),
+    UPids = lists:sort(valid_pids(Pids)),
+    RPids = valid_remote_node_and_pids(RemoteNodeAndPids),
     EPid = random_exclude(remote, UPids),
 
     % Join the InPids
-    setup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    check_remote_members(Scope, Name, RemoteNodeAndPids, EPid),
+    setup_pids(Scope, Name, UPids, RPids),
+    check_remote_members(Scope, Name, RPids, EPid),
 
     % Cleanup
-    cleanup_pids(Scope, Name, UPids, RemoteNodeAndPids),
-    {error, {no_process, Name}} = cpg:get_remote_members(Scope, Name),
+    cleanup_pids(Scope, Name, UPids, RPids),
     true.
 
 % Get a random Pid to exclude (could be one not in the list
+random_exclude(_, []) -> undefined;
 random_exclude(_, Pids) ->
     case random:uniform(2) of
         1 -> random_element(Pids);
         2 -> get_process()
     end.
 
-% No excluded Pid
-check_members(Name, [] , _) ->
-    {error,{no_such_group, Name}} = cpg:get_members(Name);
-check_members(Name, AllPids , undefined) ->
-    {ok, Name, ReturnedPids} = cpg:get_members(Name),
-    AllPids = lists:sort(ReturnedPids);
-% Only one Pid in input list, and it is excluded
-check_members(Name, _AllPids = [ExcludedPid], ExcludedPid) ->
-            {error,{no_process,Name}} = cpg:get_members(Name, ExcludedPid);
-check_members(Name, AllPids, ExcludedPid) ->
-    {ok, Name, ReturnedPids} = cpg:get_members(Name, ExcludedPid),
-    % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
-    % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
 
 % No excluded Pid
-check_members(_Scope, Name, [] , _) ->
-    {error,{no_such_group, Name}} = cpg:get_members(Name);
-check_members(Scope, Name, AllPids , undefined) ->
-    {ok, Name, ReturnedPids} = cpg:get_members(Scope, Name),
-    AllPids = lists:sort(ReturnedPids);
+check_members(Type, Name, [] , _) ->
+    {error,{no_process, Name}} = cpg:Type(Name);
+check_members(Type, Name, AllPids1 , undefined) ->
+    {ok, Name, ReturnedPids1} = validate_members(Type, Name),
+    AllPids1 = lists:sort(ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_process(AllPids1),
+    {ok, Name, ReturnedPids2} = validate_members(Type, Name),
+    AllPids2 = lists:sort(ReturnedPids2);
+
 % Only one Pid in input list, and it is excluded
-check_members(Scope, Name, _AllPids = [ExcludedPid], ExcludedPid) ->
-            {error,{no_process,Name}} = cpg:get_members(Scope, Name, ExcludedPid);
-check_members(Scope, Name, AllPids, ExcludedPid) ->
-    {ok, Name, ReturnedPids} = cpg:get_members(Scope, Name, ExcludedPid),
+check_members(Type, Name, _AllPids1 = [ExcludedPid], ExcludedPid) ->
+            {error,{no_process,Name}} = cpg:Type(Name, ExcludedPid);
+check_members(Type, Name, AllPids1, ExcludedPid) ->
+    {ok, Name, ReturnedPids1} = validate_members(Type, Name, ExcludedPid),
     % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
+    true = contains(AllPids1, ReturnedPids1),
     % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
+    false = lists:member(ExcludedPid, ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_process(AllPids1),
+    {ok, Name, ReturnedPids2} = validate_members(Type, Name, ExcludedPid),
+    % Returned Pids are always in the InList
+    true = contains(AllPids2, ReturnedPids2),
+    % Excluded Pids are *not* in the InList
+    false = lists:member(ExcludedPid, ReturnedPids2).
 
 % No excluded Pid
-check_local_members(Name, [] , _) ->
-    {error,{no_process, Name}} = cpg:get_local_members(Name);
-check_local_members(Name, AllPids , undefined) ->
-    {ok, Name, ReturnedPids} = cpg:get_local_members(Name),
-    AllPids = lists:sort(ReturnedPids);
-% Only one Pid in input list, and it is excluded
-check_local_members(Name, _AllPids = [ExcludedPid], ExcludedPid) ->
-            {error,{no_process,Name}} = cpg:get_local_members(Name, ExcludedPid);
-check_local_members(Name, AllPids, ExcludedPid) ->
-    {ok, Name, ReturnedPids} = cpg:get_local_members(Name, ExcludedPid),
-    % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
-    % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
+check_members(Type, Scope, Name, [] , _) ->
+    {error,{no_process, Name}} = cpg:Type(Scope, Name);
+check_members(Type, Scope, Name, AllPids1 , undefined) ->
+    {ok, Name, ReturnedPids1} = validate_members(Type, Scope, Name),
+    AllPids1 = lists:sort(ReturnedPids1),
 
-check_local_members(Scope, Name, [] , _) ->
-    {error,{no_process, Name}} = cpg:get_local_members(Scope, Name);
-check_local_members(Scope, Name, AllPids , undefined) ->
-    {ok, Name, ReturnedPids} = cpg:get_local_members(Scope, Name),
-    AllPids = lists:sort(ReturnedPids);
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_process(AllPids1),
+    {ok, Name, ReturnedPids2} = validate_members(Type, Scope, Name),
+    AllPids2 = lists:sort(ReturnedPids2);
+
 % Only one Pid in input list, and it is excluded
-check_local_members(Scope, Name, _AllPids = [ExcludedPid], ExcludedPid) ->
-            {error,{no_process,Name}} = cpg:get_local_members(Scope, Name, ExcludedPid);
-check_local_members(Scope, Name, AllPids, ExcludedPid) ->
-    {ok, Name, ReturnedPids} = cpg:get_local_members(Scope, Name, ExcludedPid),
+check_members(Type, Scope, Name, _AllPids1 = [ExcludedPid], ExcludedPid) ->
+            {error,{no_process,Name}} = cpg:Type(Scope, Name, ExcludedPid);
+check_members(Type, Scope, Name, AllPids1, ExcludedPid) ->
+    {ok, Name, ReturnedPids1} = validate_members(Type, Scope, Name, ExcludedPid),
     % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
+    true = contains(AllPids1, ReturnedPids1),
     % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
+    false = lists:member(ExcludedPid, ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_process(AllPids1),
+    {ok, Name, ReturnedPids2} = validate_members(Type, Scope, Name, ExcludedPid),
+    % Returned Pids are always in the InList
+    true = contains(AllPids2, ReturnedPids2),
+    % Excluded Pids are *not* in the InList
+    false = lists:member(ExcludedPid, ReturnedPids2).
 
 % No excluded Pid
 check_remote_members(Name, [] , _) ->
     {error,{no_process, Name}} = cpg:get_remote_members(Name);
 check_remote_members(Name, RemoteNodeAndPids , undefined) ->
-    AllPids = remote_pids(RemoteNodeAndPids),
-    {ok, Name, ReturnedPids} = cpg:get_remote_members(Name),
-    AllPids = lists:sort(ReturnedPids);
+    AllPids1 = remote_pids(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids1} = validate_members(get_remote_members, Name),
+    AllPids1 = lists:sort(ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_remote_process(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids2} = validate_members(get_remote_members, Name),
+    ct:pal("AllPids2:~p~n", [{AllPids2, ReturnedPids2, AllPids1, RemoteNodeAndPids}]),
+    AllPids2 = lists:sort(ReturnedPids2);
+
 % Only one Pid in input list, and it is excluded
 check_remote_members(Name, _RemoteNodeAndPids = [ExcludedPid], ExcludedPid) ->
             {error,{no_process,Name}} = cpg:get_remote_members(Name, ExcludedPid);
 check_remote_members(Name, RemoteNodeAndPids, ExcludedPid) ->
-    AllPids = remote_pids(RemoteNodeAndPids),
-    {ok, Name, ReturnedPids} = cpg:get_remote_members(Name, ExcludedPid),
+    AllPids1 = remote_pids(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids1} = validate_members(get_remote_members, Name, ExcludedPid),
     % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
+    true = contains(AllPids1, ReturnedPids1),
     % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
+    false = lists:member(ExcludedPid, ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_remote_process(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids2} = validate_members(get_remote_members, Name, ExcludedPid),
+    % Returned Pids are always in the InList
+    true = contains(AllPids2, ReturnedPids2),
+    % Excluded Pids are *not* in the InList
+    false = lists:member(ExcludedPid, ReturnedPids2).
 
 check_remote_members(Scope, Name, [] , _) ->
     {error,{no_process, Name}} = cpg:get_remote_members(Scope, Name);
 check_remote_members(Scope, Name, RemoteNodeAndPids , undefined) ->
-    AllPids = remote_pids(RemoteNodeAndPids),
-    {ok, Name, ReturnedPids} = cpg:get_remote_members(Scope, Name),
-    AllPids = lists:sort(ReturnedPids);
+    AllPids1 = remote_pids(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids1} = validate_members(get_remote_members, Scope, Name),
+    AllPids1 = lists:sort(ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_remote_process(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids2} = validate_members(get_remote_members, Scope, Name),
+    AllPids2 = lists:sort(ReturnedPids2);
+
 % Only one Pid in input list, and it is excluded
 check_remote_members(Scope, Name, _RemoteNodeAndPids = [ExcludedPid], ExcludedPid) ->
             {error,{no_process,Name}} = cpg:get_remote_members(Scope, Name, ExcludedPid);
 check_remote_members(Scope, Name, RemoteNodeAndPids, ExcludedPid) ->
-    AllPids = remote_pids(RemoteNodeAndPids),
-    {ok, Name, ReturnedPids} = cpg:get_remote_members(Scope, Name, ExcludedPid),
+    AllPids1 = remote_pids(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids1} = validate_members(get_remote_members, Scope, Name, ExcludedPid),
     % Returned Pids are always in the InList
-    true = contains(AllPids, ReturnedPids),
+    true = contains(AllPids1, ReturnedPids1),
     % Excluded Pids are *not* in the InList
-    false = lists:member(ExcludedPid, ReturnedPids).
+    false = lists:member(ExcludedPid, ReturnedPids1),
+
+    % Kill a process, and make sure that the kill 'takes' 
+    {_Pid, AllPids2} = end_remote_process(RemoteNodeAndPids),
+    {ok, Name, ReturnedPids2} = validate_members(get_remote_members, Scope, Name, ExcludedPid),
+    % Returned Pids are always in the InList
+    true = contains(AllPids2, ReturnedPids2),
+    % Excluded Pids are *not* in the InList
+    false = lists:member(ExcludedPid, ReturnedPids2).
+
+check_which_groups(Names, LocalPids, RemoteNodeAndPids) ->
+    [setup_pids(Name, LocalPids, RemoteNodeAndPids) || Name <- Names],
+    Groups = lists:usort(cpg:which_groups()), 
+    Groups = lists:usort(Names),
+    delete_groups(Names),
+    true.
+
+check_which_groups(Scope, Names, LocalPids, RemoteNodeAndPids) ->
+    [setup_pids(Scope, Name, LocalPids, RemoteNodeAndPids) || Name <- Names],
+    Groups = lists:usort(cpg:which_groups(Scope)), 
+    Groups = lists:usort(Names),
+    delete_groups(Scope, Names),
+    true.
+
+
+% validate an error, but return an empty list for later tests
+validate_members(Type, Name) ->
+    case cpg:Type(Name) of
+        {error, {no_process, Name}} -> {ok, Name, []};
+        Other -> Other
+    end.
+
+validate_members(Type, Name, ExcludedPid) when is_pid(ExcludedPid) ->
+    case cpg:Type(Name, ExcludedPid) of
+        {error, {no_process, Name}} -> {ok, Name, []};
+        Other -> Other
+    end;
+
+% validate an error, but return an empty list for later tests
+validate_members(Type, Scope, Name) ->
+    case cpg:Type(Scope, Name) of
+        {error, {no_process, Name}} -> {ok, Name, []};
+        Other -> Other
+    end.
+
+validate_members(Type, Scope, Name, ExcludedPid) ->
+    case cpg:Type(Scope, Name, ExcludedPid) of
+        {error, {no_process, Name}} -> {ok, Name, []};
+        Other -> Other
+    end.
+
 
 %% PropEr generators
 % For a trie, name() is a non_empty string
@@ -856,6 +962,10 @@ name() ->
     ?LET(X, non_empty(word()), X).
 
 word() ->  atom_to_list(node()) ++ list(oneof([integer($a, $z), integer($A, $Z), integer($0, $9) , oneof("!\"#$%&'()+,-./:;<=>?@[\\]^_`{|}\~")])).
+
+names() ->
+    ?LET(X, list(name()), X).
+
 
 pid(local) ->
     ?LET(X, oneof(get_process_list(local)), X).
@@ -876,8 +986,21 @@ get_process() ->
     {ok, Pid} = cpg_dummy_server:start_process(random_name(?DEFAULT_NAME)),
     Pid.
 
+end_process(Pids) ->
+    Pid = random_element(Pids),
+    ok = cpg_dummy_server:stop_process(Pid),
+    timer:sleep(200),
+    {Pid, lists:sort(valid_pids(Pids))}.
+
+end_remote_process(RemoteNodeAndPids) ->
+    ValidNodeAndPids = valid_remote_node_and_pids(RemoteNodeAndPids),
+    {Node, Pid} = random_element(ValidNodeAndPids),
+    ok = ct_rpc:call(Node, cpg_dummy_server, stop_process, [Pid]),
+    timer:sleep(200),
+    {Pid, remote_pids(valid_remote_node_and_pids(RemoteNodeAndPids))}.
+
 get_process_list(local) ->
-    lists:map(fun(_) -> get_process() end, lists:seq(1, ?NUMTESTS)).
+    lists:map(fun(_) -> get_process() end, lists:seq(1, ?NUMPROCS)).
 
 get_node_and_process() ->
     Node = get_remote_node(),
@@ -885,7 +1008,7 @@ get_node_and_process() ->
     {Node, Pid}.
 
 get_node_and_process_list(remote) ->
-    lists:map(fun(_) -> get_node_and_process() end, lists:seq(1, ?NUMTESTS)).
+    lists:map(fun(_) -> get_node_and_process() end, lists:seq(1, ?NUMPROCS)).
 
     
 get_remote_node() ->
@@ -898,30 +1021,37 @@ get_scope(ScopeAll) ->
 %% Start/Stop funs
 
 start(Config) ->
-    ok = reltool_util:application_start(cpg),
+    % Start local 
+    
+    % So that env doesn't get overwritten
+    application:load(cpg),
+    ScopeAll = ?config(scope_all, Config),
+    application:set_env(cpg, scope, ScopeAll),
     ok = application:start(sasl),
+    ok = reltool_util:application_start(cpg),
+
+    % Remote
+    setup_remote_nodes(Config),
     Config.
 
-stop(_Config) ->
-    ok = application:stop(sasl),
+stop(Config) ->
+    % Stop local
     ok = reltool_util:application_stop(cpg),
+    ok = application:stop(sasl),
+    % Remote
+    teardown_remote_nodes(Config),
     ok.
 
 % Add a couple of scopes to the config,
 % and startup CPG remotely
 setup_environment(Config) ->
     random:seed(erlang:now()),
-    % So that env doesn't get overwritten
-    application:load(cpg),
 
     % Define the Scopes
     ScopeAll = [random_name(Scope) || Scope <- ?SCOPES],
-    application:set_env(cpg, scope, ScopeAll),
-    Config1 = [{scope_all, ScopeAll}] ++ Config,
 
-    % Get cpg running on the remote nodes
-    Config2 = [{nodes, ?REMOTE_NODES} | Config1],
-    setup_remote_nodes(Config2).
+    [{nodes, ?REMOTE_NODES}, 
+     {scope_all, ScopeAll}] ++ Config.
 
 % 
 % Stop CPG remotely
@@ -935,8 +1065,10 @@ setup_remote_nodes(Config) ->
 
 setup_remote_node(Node, Config) ->
     ScopeAll = ?config(scope_all, Config),
+    % So that env doesn't get overwritten
     ct_rpc:call(Node, application, set_env, [cpg, scope, ScopeAll]),
-    ct_rpc:call(Node, application, get_env, [cpg, scope]),
+    ct_rpc:call(Node, reltool_util, application_start, [sasl]),
+
     ct_rpc:call(Node, reltool_util, application_start, [cpg]).
 
 teardown_remote_nodes(Config) ->
@@ -945,6 +1077,7 @@ teardown_remote_nodes(Config) ->
     Config.
 
 teardown_remote_node(Node) ->
+    ct_rpc:call(Node, reltool_util, application_stop, [sasl]),
     ct_rpc:call(Node, reltool_util, application_stop, [cpg]).
 
 stop_dummy_processes(Config) ->
@@ -960,6 +1093,12 @@ stop_remote_dummy_processes(Node) ->
     lists:foreach(fun({_, Pid, _, _}) -> 
                 ct_rpc:call(Node, supervisor, terminate_child, [cpg_dummy_sup, Pid])
         end, ProcList).
+
+remove_groups(Config) ->
+    ScopeAll = ?config(scope_all, Config),
+    [delete_group(Name) || Name <- cpg:which_groups()],
+    [[delete_group(Scope, Name) || Name <- cpg:which_groups(Scope)] || Scope <- ScopeAll].
+
 
 
 %% Utility functions
@@ -981,6 +1120,7 @@ random_element(InList) ->
 %  (No duplicates)
 random_elements(InList) ->
     random_elements(InList, []).
+random_elements([], []) -> undefined;
 random_elements([], Acc) -> lists:sort(Acc);
 random_elements([H | T], Acc) ->
     case random:uniform(2) of
@@ -1009,7 +1149,7 @@ not_contains(ListA, _ListB = [H | Tail]) ->
 setup_pids(Name, LocalPids, RemoteNodeAndPids) ->
     lists:foreach(fun(Pid) ->
                 ok = cpg:join(Name, Pid)
-        end, LocalPids),
+        end, valid_pids(LocalPids)),
     lists:foreach(fun({Node, Pid}) ->
                 ok = remote_join(Node, Name, Pid)
         end, RemoteNodeAndPids).
@@ -1017,7 +1157,7 @@ setup_pids(Name, LocalPids, RemoteNodeAndPids) ->
 setup_pids(Scope, Name, LocalPids, RemoteNodeAndPids) ->
     lists:foreach(fun(Pid) ->
                 ok = cpg:join(Scope, Name, Pid)
-        end, LocalPids),
+        end, valid_pids(LocalPids)),
     lists:foreach(fun({Node, Pid}) ->
                 ok = remote_join(Node, Scope, Name, Pid)
         end, RemoteNodeAndPids).
@@ -1025,21 +1165,34 @@ setup_pids(Scope, Name, LocalPids, RemoteNodeAndPids) ->
 %% Remove the relevant Pids locally and remotely
 cleanup_pids(Name, LocalPids, RemoteNodeAndPids) ->
     lists:foreach(fun(Pid) ->
-                cpg:leave(Name, Pid)
-        end, lists:usort(LocalPids)),
+                ok = cpg:leave(Name, Pid)
+        end, lists:usort(valid_pids(LocalPids))),
     SortedNodeAndPids = lists:usort(fun({_,A}, {_, B}) -> A =< B end, RemoteNodeAndPids),
     lists:foreach(fun({Node, Pid}) ->
                 ok = remote_leave(Node, Name, Pid)
-            end, SortedNodeAndPids).
+            end, valid_remote_node_and_pids(SortedNodeAndPids)).
 
 cleanup_pids(Scope, Name, LocalPids, RemoteNodeAndPids) ->
     lists:foreach(fun(Pid) ->
                 ok = cpg:leave(Scope, Name, Pid)
-        end, lists:usort(LocalPids)),
+        end, lists:usort(valid_pids(LocalPids))),
     SortedNodeAndPids = lists:usort(fun({_,A}, {_, B}) -> A =< B end, RemoteNodeAndPids),
     lists:foreach(fun({Node, Pid}) ->
                 ok = remote_leave(Node, Scope, Name, Pid)
-        end, SortedNodeAndPids).
+        end, valid_remote_node_and_pids(SortedNodeAndPids)).
+
+valid_pids(Pids) ->
+    lists:reverse(lists:foldr(fun(Pid, Acc) -> case is_process_alive(Pid) of
+                    true -> [Pid | Acc];
+                    false -> Acc
+                end end, [], Pids)).
+
+valid_remote_node_and_pids(RemoteNodeAndPids) ->
+    lists:foldr(fun({Node, Pid}, Acc) -> 
+                case ct_rpc:call(Node, erlang, is_process_alive, [Pid]) of
+                    true -> [{Node, Pid}|Acc];
+                    false -> Acc
+                end end, [], RemoteNodeAndPids).
 
 
 %% Remote Utility Functions
@@ -1059,3 +1212,15 @@ remote_pids(RemoteNodeAndPids) ->
     RemotePids = lists:map(fun({_, Pid}) -> Pid end, RemoteNodeAndPids),
     lists:sort(RemotePids).
 
+delete_groups(Names) ->
+    [delete_group(Name) || Name <- Names].
+delete_groups(Scope, Names) ->
+    [delete_group(Scope, Name) || Name <- Names].
+
+delete_group(Name) ->
+    delete_group(?DEFAULT_SCOPE, Name).
+delete_group(Scope, Name) ->
+    global:trans({{Scope, Name}, self()},
+                 fun() ->
+                gen_server:multi_call(Scope, {delete, Name})
+        end).

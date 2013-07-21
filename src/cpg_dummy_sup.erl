@@ -27,9 +27,12 @@ start_process(Name) ->
     supervisor:start_child(?MODULE, [Name]).
 
 
-stop_process(Name) ->
+stop_process(Name) when is_binary(Name) ->
     ChildName = cpg_dummy_server:registered_name(Name),
-    supervisor:terminate_child(?MODULE, whereis(ChildName)).
+    supervisor:terminate_child(?MODULE, whereis(ChildName));
+
+stop_process(Pid) when is_pid(Pid) ->
+    supervisor:terminate_child(?MODULE, Pid).
 
 
 init([]) ->

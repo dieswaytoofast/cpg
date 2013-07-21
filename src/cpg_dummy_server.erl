@@ -45,8 +45,8 @@ start_process(Name) when is_binary(Name) ->
     cpg_dummy_sup:start_process(Name).
 
 %% @doc Stop a process
--spec stop_process(binary()) -> ok | {error, any()}.
-stop_process(Name) ->
+-spec stop_process(pid() | binary()) -> ok | {error, any()}.
+stop_process(Name) when is_binary(Name) or is_pid(Name) ->
     cpg_dummy_sup:stop_process(Name).
 
 

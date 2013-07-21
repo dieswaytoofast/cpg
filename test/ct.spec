@@ -4,12 +4,21 @@
 {node, c, 'c@paglierino'}.
 {init, [a], [{node_start, [{startup_functions, [{application, start, [crypto, public_key]}]},
                               {monitor_master, true},
+                              {boot_timeout, 3},
+                              {init_timeout, 3},
+                              {startup_timeout, 3},
                               {erl_flags, "-pa 'DIR'/ebin -pz 'DIR'/deps/*/ebin"}]}]}.
 {init, [b], [{node_start, [{startup_functions, [{application, start, [crypto, public_key]}]},
                               {monitor_master, true},
+                              {boot_timeout, 3},
+                              {init_timeout, 3},
+                              {startup_timeout, 3},
                               {erl_flags, "-pa 'DIR'/ebin -pz 'DIR'/deps/*/ebin"}]}]}.
 {init, [c], [{node_start, [{startup_functions, [{application, start, [crypto, public_key]}]},
                               {monitor_master, true},
+                              {boot_timeout, 3},
+                              {init_timeout, 3},
+                              {startup_timeout, 3},
                               {erl_flags, "-pa 'DIR'/ebin -pz 'DIR'/deps/*/ebin"}]}]}.
 {include, "'DIR'/include"}.
 {logdir, master, "'DIR'/test/logs"}.
